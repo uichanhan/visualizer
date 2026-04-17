@@ -18,9 +18,14 @@ export default function App() {
   const [shapeCount, setShapeCount] = useState(6);
   const [theme, setTheme] = useState('Neon');
   const [currentColors, setCurrentColors] = useState(THEMES['Neon']);
+  const [bgColor, setBgColor] = useState(THEMES['Neon'][0]);
+  const [bgOpacity, setBgOpacity] = useState(12);
   const [complexity, setComplexity] = useState(4);
   const [reactivity, setReactivity] = useState(70);
   const [blurIntensity, setBlurIntensity] = useState(80);
+  const [colorFlowSpeed, setColorFlowSpeed] = useState(50);
+  const [heartbeatBpm, setHeartbeatBpm] = useState(60);
+  const [focalWander, setFocalWander] = useState(50);
 
   const canvasRef = useRef(null);
   const audioCtxRef = useRef(null);
@@ -129,10 +134,11 @@ export default function App() {
       const container = canvas.parentElement;
       
       // 배경 다이나믹 업데이트 (리액트 state 대신 DOM 직접 수정으로 60fps 보장)
-      // 배경 색상이 음악의 고주파와 시간에 따라 색(Hue)이 돌고 베이스(킥)에 맞춰 번쩍거립니다
+      // [신규] Color Flow Speed 슬라이더 값에 비례하여 지속적으로 그라디언트 Hue Rotate를 가속
+      // [수정] 무작위 난수 변형(Math.sin 등)을 지워내어 사용자가 선택한 커스텀 컬러들이 전혀 왜곡(탁해짐) 없이 그대로 반영되도록 수정했습니다. 
       const bgElement = container.parentElement;
       if (bgElement) {
-        bgElement.style.filter = `hue-rotate(${smoothedHigh.current * 40 + Math.sin(timeRef.current * 0.1) * 30}deg) brightness(${1 + currentBass * 0.35})`;
+        bgElement.style.filter = `hue-rotate(${timeRef.current * (colorFlowSpeed * 0.4)}deg) brightness(${1 + currentBass * 0.35})`;
       }
 
       const { width, height } = container.getBoundingClientRect();
@@ -172,7 +178,14 @@ export default function App() {
       // 오디오 변화 폭(Amplitude) 극대화: 기본 크기가 작아진 만큼, 최대 크기 도달을 위한 스케일 점프 폭을 엄청나게 높임
       // (125% 물리 다이나믹스 상향으로 인해 이전 최대 폭 1.833 -> 2.29 배로 증폭)
       const scaleJump = Math.min(smoothedBass.current * (reactivity / 100) * 2.29, 2.29);
-      const audioScale = 1 + scaleJump;
+      
+      // [신규] 심장 박동 (Heartbeat BPM) 수학적 펌핑 모델 결합
+      // BPM(분당 박동수)을 Hz(초당 진동수)로 환산 후 사인 곡선으로 펌핑 기저 폭 생성 (수면 호흡 연출)
+      const bpmHz = heartbeatBpm / 60;
+      const bpmPulse = Math.sin(timeRef.current * Math.PI * 2 * bpmHz) * 0.12; 
+      
+      // 오디오 파형과 인공 심장박동 파형을 하나로 합성
+      const audioScale = 1 + scaleJump + bpmPulse;
 
       // 하이라이트를 위한 Screen 블렌드 모드 (빛이 중첩될수록 밝아짐)
       ctx.globalCompositeOperation = 'screen';
@@ -233,9 +246,11 @@ export default function App() {
         const randomFlutterX = Math.sin(liquidTime2 * 3.1 + layerIdx) * 0.133;
         const randomFlutterY = Math.cos(liquidTime1 * 2.8 - layerIdx) * 0.133;
 
-        // 초고속 다방향 혼합 이동: 좌표가 요동치는 '전체 이동 반경(Radius)' 자체를 기존 0.7에서 0.23 (1/3)으로 깎아냄
-        const focalOffsetX = cx + (Math.cos(liquidTime1 + layerIdx * 1.2) * 0.5 + Math.sin(liquidTime2 * 1.4) * 0.3 + randomFlutterX) * (gradRadius * 0.23);
-        const focalOffsetY = cy + (Math.sin(liquidTime2 + layerIdx * 0.8) * 0.5 + Math.cos(liquidTime1 * 1.1) * 0.3 + randomFlutterY) * (gradRadius * 0.23);
+        // [신규] Focal Wander 슬라이더 값에 비례하여 초점 이동 허용 반경을 결정
+        // 50%일 때 기존 안정화 값인 0.23, 최대(100%)일 때 훨씬 넓고 기괴한 궤도(0.46)
+        const wanderRadius = gradRadius * (focalWander / 100) * 0.46;
+        const focalOffsetX = cx + (Math.cos(liquidTime1 + layerIdx * 1.2) * 0.5 + Math.sin(liquidTime2 * 1.4) * 0.3 + randomFlutterX) * wanderRadius;
+        const focalOffsetY = cy + (Math.sin(liquidTime2 + layerIdx * 0.8) * 0.5 + Math.cos(liquidTime1 * 1.1) * 0.3 + randomFlutterY) * wanderRadius;
 
         const grad = ctx.createRadialGradient(focalOffsetX, focalOffsetY, 0, cx, cy, gradRadius);
         
@@ -371,7 +386,7 @@ export default function App() {
       {/* ============== 좌측 캔버스 (비주얼라이저) ============== */}
       <div
         className={`${uiVisible ? 'w-[70%]' : 'w-full'} h-full relative flex items-center justify-center overflow-hidden transition-all duration-700 ease-in-out`}
-        style={{ backgroundColor: `rgba(${hexToRGB(currentColors[0])}, 0.12)` }}
+        style={{ backgroundColor: `rgba(${hexToRGB(bgColor)}, ${bgOpacity / 100})` }}
       >
         {/* 블러(blur) 효과가 가장자리에서 짤리는 것을 방지하기 위해 컨테이너의 크기를 화면보다 크게 만듬 */}
         <div
@@ -405,20 +420,89 @@ export default function App() {
             onSelect={(name) => {
               setTheme(name);
               setCurrentColors(THEMES[name]);
+              setBgColor(THEMES[name][0]);
             }} 
             onRandom={() => {
               setTheme('Random');
-              setCurrentColors(generateRandomPalette());
+              const newColors = generateRandomPalette();
+              setCurrentColors(newColors);
+              setBgColor(newColors[0]);
             }}
           />
+
+          {/* 커스텀 컬러 패널 */}
+          <div className="flex flex-col gap-3">
+            <div className="flex justify-between items-center text-xs font-semibold text-white/70 uppercase tracking-wide">
+              <span className="flex items-center gap-2">
+                <Icons.Palette /> Custom Colors
+              </span>
+            </div>
+            
+            <div className="flex flex-col gap-4 bg-white/5 p-4 rounded-xl border border-white/10">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-white/80 font-medium">Background Color & Opacity</span>
+                <div className="flex items-center gap-3">
+                  <input 
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={bgOpacity}
+                    onChange={(e) => setBgOpacity(Number(e.target.value))}
+                    className="w-16 h-1 bg-white/20 rounded-full appearance-none outline-none accent-white hover:accent-gray-300 transition-all cursor-pointer"
+                    title={`Opacity: ${bgOpacity}%`}
+                  />
+                  <input 
+                    type="color" 
+                    value={bgColor} 
+                    onChange={(e) => {
+                      setTheme('Custom');
+                      setBgColor(e.target.value);
+                    }}
+                    className="w-10 h-8 rounded cursor-pointer border-0 bg-transparent p-0"
+                  />
+                </div>
+              </div>
+
+              <div className="w-full h-[1px] bg-white/10"></div>
+
+              <div className="flex flex-col gap-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-white/80 font-medium">Visualizer Colors</span>
+                </div>
+                <div className="flex items-center gap-2 w-full">
+                  {currentColors.map((color, idx) => (
+                    <input 
+                      key={idx}
+                      type="color" 
+                      value={color}
+                      onChange={(e) => {
+                        setTheme('Custom');
+                        const newColors = [...currentColors];
+                        newColors[idx] = e.target.value;
+                        setCurrentColors(newColors);
+                      }}
+                      className="flex-1 h-8 rounded cursor-pointer border-0 bg-transparent p-0"
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div className="w-full h-[1px] bg-white/5 my-2"></div>
 
           <Slider label="Morphing" value={morphing} onChange={setMorphing} min={0} max={100} icon={<Icons.Waves />} />
-          <Slider label="Shape Layers" value={shapeCount} onChange={setShapeCount} min={1} max={12} icon={<Icons.Layers />} />
-          <Slider label="Color Mix Count" value={complexity} onChange={setComplexity} min={1} max={5} icon={<Icons.Palette />} />
           <Slider label="Reactivity" value={reactivity} onChange={setReactivity} min={0} max={100} icon={<Icons.Activity />} />
           <Slider label="Blur Intensity" value={blurIntensity} onChange={setBlurIntensity} min={0} max={150} icon={<Icons.Blur />} />
+          <Slider label="Color Mix Count" value={complexity} onChange={setComplexity} min={1} max={5} icon={<Icons.Palette />} />
+          <Slider label="Shape Layers" value={shapeCount} onChange={setShapeCount} min={1} max={12} icon={<Icons.Layers />} />
+          
+          <div className="w-full h-[1px] bg-white/5 my-2"></div>
+
+          {/* [신규] 3종 애니메이션 고급 컨트롤 패널 */}
+          <Slider label="Color Flow Speed" value={colorFlowSpeed} onChange={setColorFlowSpeed} min={0} max={100} icon={<Icons.Palette />} />
+          <Slider label="Heartbeat BPM" value={heartbeatBpm} onChange={setHeartbeatBpm} min={40} max={180} icon={<Icons.Activity />} />
+          <Slider label="Focal Wander" value={focalWander} onChange={setFocalWander} min={0} max={100} icon={<Icons.Shuffle />} />
         </div>
       </div>
 

@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Blurry Visualizer / Standalone</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background-color: #000; margin: 0; overflow: hidden; }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.1); border-radius: 10px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.2); }
+  </style>
+
+  <!-- React & ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- Babel for Inline JSX Compilation -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const THEMES = {
+      Sunset: ['#f43f5e', '#f97316', '#eab308', '#fbbf24', '#f87171'],
+      Ocean: ['#0ea5e9', '#3b82f6', '#06b6d4', '#14b8a6', '#38bdf8'],
+      Neon: ['#a855f7', '#d946ef', '#ec4899', '#8b5cf6', '#6366f1'],
+      Forest: ['#22c55e', '#10b981', '#14b8a6', '#84cc16', '#4ade80'],
+      Phantom: ['#ffffff', '#d4d4d8', '#a1a1aa', '#71717a', '#f4f4f5']
+    };
+
+    function App() {
+      const [started, setStarted] = useState(false);
+      const [uiVisible, setUiVisible] = useState(true);
+      const [morphing, setMorphing] = useState(65);
+      const [shapeCount, setShapeCount] = useState(6);
+      const [theme, setTheme] = useState('Neon');
+      const [currentColors, setCurrentColors] = useState(THEMES['Neon']);
+      const [bgColor, setBgColor] = useState(THEMES['Neon'][0]);
+      const [bgOpacity, setBgOpacity] = useState(12);
+      const [complexity, setComplexity] = useState(4);
+      const [reactivity, setReactivity] = useState(70);
+      const [blurIntensity, setBlurIntensity] = useState(80);
+      const [colorFlowSpeed, setColorFlowSpeed] = useState(50);
+      const [heartbeatBpm, setHeartbeatBpm] = useState(60);
+      const [focalWander, setFocalWander] = useState(50);
+
+      const canvasRef = useRef(null);
+      const audioCtxRef = useRef(null);
+      const analyserRef = useRef(null);
+      const dataArrayRef = useRef(null);
+      const frameRef = useRef(null);
+
+      const timeRef = useRef(0);
+      const smoothedBass = useRef(0);
+      const smoothedMid = useRef(0);
+      const smoothedHigh = useRef(0);
+      const smoothedPaletteRef = useRef(null);
+      
+      const prevBassRef = useRef(0);
+      const prevMidRef = useRef(0);
+      const lastBeatTimeRef = useRef(0);
+      const sideRipplesRef = useRef([]);
+
+      const startVibe = async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          const analyser = audioCtx.createAnalyser();
+          const source = audioCtx.createMediaStreamSource(stream);
+
+          source.connect(analyser);
+          analyser.fftSize = 512;
+
+          const bufferLength = analyser.frequencyBinCount;
+          dataArrayRef.current = new Uint8Array(bufferLength);
+
+          audioCtxRef.current = audioCtx;
+          analyserRef.current = analyser;
+          setStarted(true);
+        } catch (err) {
+          alert('🚫 보안 알림: 로컬 파일(file://) 모드로 열었기 때문에 브라우저 보안 정책상 마이크가 강제 차단되었습니다.\n\n정상적인 마이크 오디오 반응을 원하시면 Vercel 배포 주소로 접속하시거나 로컬 서버를 구동해야 합니다.\n\n대신 비주얼라이저 UI와 기본 박동 애니메이션을 감상할 수 있는 [데모 모드]로 시작합니다!');
+          
+          // 마이크 차단 시 화면이 멈추지 않도록 더미(가짜) 아날라이저를 주입합니다.
+          analyserRef.current = {
+            getByteFrequencyData: (arr) => {
+              for (let i = 0; i < arr.length; i++) arr[i] = 0; 
+            }
+          };
+          dataArrayRef.current = new Uint8Array(512);
+          setStarted(true);
+        }
+      };
+
+      useEffect(() => {
+        if (!started || !canvasRef.current || !analyserRef.current) return;
+
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+
+        const draw = () => {
+          frameRef.current = requestAnimationFrame(draw);
+
+          const analyser = analyserRef.current;
+          const dataArray = dataArrayRef.current;
+
+          analyser.getByteFrequencyData(dataArray);
+          
+          let bassSum = 0;
+          for (let i = 1; i < 4; i++) bassSum += dataArray[i];
+          const rawBass = (bassSum / 3) / 255;
+          const currentBass = Math.min(rawBass * 0.75, 1.0);
+
+          let midSum = 0;
+          for (let i = 4; i < 25; i++) midSum += dataArray[i];
+          const currentMid = Math.min((midSum / 21) / 255 * 1.4, 1.0);
+
+          let highSum = 0;
+          for (let i = 25; i < 80; i++) highSum += dataArray[i];
+          const currentHigh = Math.min((highSum / 55) / 255 * 1.4, 1.0);
+
+          const bassDiff = currentBass - smoothedBass.current;
+          if (bassDiff > 0) smoothedBass.current += bassDiff * 0.85; 
+          else smoothedBass.current += bassDiff * 0.25; 
+
+          smoothedMid.current += (currentMid - smoothedMid.current) * 0.1;
+          smoothedHigh.current += (currentHigh - smoothedHigh.current) * 0.1;
+
+          timeRef.current += (0.005 + (smoothedHigh.current * 0.02 * (reactivity / 100))) * 1.25;
+
+          const container = canvas.parentElement;
+          const bgElement = container.parentElement;
+          if (bgElement) {
+            bgElement.style.filter = `hue-rotate(${timeRef.current * (colorFlowSpeed * 0.4)}deg) brightness(${1 + currentBass * 0.35})`;
+          }
+
+          const { width, height } = container.getBoundingClientRect();
+          const dpi = window.devicePixelRatio || 1;
+
+          if (canvas.width !== width * dpi || canvas.height !== height * dpi) {
+            canvas.width = width * dpi;
+            canvas.height = height * dpi;
+            ctx.scale(dpi, dpi);
+            canvas.style.width = width + 'px';
+            canvas.style.height = height + 'px';
+          }
+
+          ctx.clearRect(0, 0, width, height);
+          const cx = width / 2;
+          const cy = height / 2;
+          
+          const radiusBase = Math.min(width, height) * 0.105;
+          const targetPalette = currentColors.slice(0, complexity);
+
+          if (!smoothedPaletteRef.current || smoothedPaletteRef.current.length !== targetPalette.length) {
+            smoothedPaletteRef.current = targetPalette.map(hex => hexToRGB(hex).split(',').map(Number));
+          }
+          smoothedPaletteRef.current = smoothedPaletteRef.current.map((currRGB, idx) => {
+            const targetRGB = hexToRGB(targetPalette[idx]).split(',').map(Number);
+            return [
+              currRGB[0] + (targetRGB[0] - currRGB[0]) * 0.04,
+              currRGB[1] + (targetRGB[1] - currRGB[1]) * 0.04,
+              currRGB[2] + (targetRGB[2] - currRGB[2]) * 0.04
+            ];
+          });
+
+          const scaleJump = Math.min(smoothedBass.current * (reactivity / 100) * 2.29, 2.29);
+          const bpmHz = heartbeatBpm / 60;
+          const bpmPulse = Math.sin(timeRef.current * Math.PI * 2 * bpmHz) * 0.12; 
+          const audioScale = 1 + scaleJump + bpmPulse;
+
+          ctx.globalCompositeOperation = 'screen';
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(timeRef.current * 0.1); 
+          ctx.translate(-cx, -cy);
+
+          const drawBlob = (baseR, scale, layerIdx, alpha, tOffset, blurPx, cIdxMain, cIdxSub) => {
+            ctx.filter = `blur(${Math.max(blurPx, 0)}px)`;
+            ctx.beginPath();
+            const points = 120;
+            const offsetTime = tOffset + (layerIdx * 15.5);
+
+            for (let j = 0; j <= points; j++) {
+              const angle = (j / points) * Math.PI * 2;
+              const noiseVal = (Math.sin(angle * 2 + offsetTime * 1.2) + Math.sin(angle * 3 - offsetTime * 0.8) * 0.5 + Math.sin(angle * 4 + offsetTime * 0.5) * 0.25) / 1.75;
+              const morphFactor = morphing / 100;
+              const r = (baseR + baseR * morphFactor * noiseVal * 0.4) * scale;
+              const orbitR = 40 * morphFactor;
+              const px = cx + Math.cos(offsetTime * 0.7) * orbitR + Math.cos(angle) * r;
+              const py = cy + Math.sin(offsetTime * 0.7) * orbitR + Math.sin(angle) * r;
+              if (j === 0) ctx.moveTo(px, py);
+              else ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+
+            const dynamicMainIdx = (cIdxMain + Math.floor(tOffset * 0.15)) % targetPalette.length;
+            const dynamicSubIdx = (cIdxSub + Math.floor(tOffset * 0.2) + 1) % targetPalette.length;
+
+            const mainC = smoothedPaletteRef.current[dynamicMainIdx];
+            const subC = smoothedPaletteRef.current[dynamicSubIdx];
+            const gradRadius = Math.max(baseR * scale * 1.5, 1);
+            
+            const liquidTime1 = tOffset * 0.203; 
+            const liquidTime2 = tOffset * 0.171; 
+            
+            const randomFlutterX = Math.sin(liquidTime2 * 3.1 + layerIdx) * 0.133;
+            const randomFlutterY = Math.cos(liquidTime1 * 2.8 - layerIdx) * 0.133;
+            const wanderRadius = gradRadius * (focalWander / 100) * 0.46;
+            const focalOffsetX = cx + (Math.cos(liquidTime1 + layerIdx * 1.2) * 0.5 + Math.sin(liquidTime2 * 1.4) * 0.3 + randomFlutterX) * wanderRadius;
+            const focalOffsetY = cy + (Math.sin(liquidTime2 + layerIdx * 0.8) * 0.5 + Math.cos(liquidTime1 * 1.1) * 0.3 + randomFlutterY) * wanderRadius;
+
+            const grad = ctx.createRadialGradient(focalOffsetX, focalOffsetY, 0, cx, cy, gradRadius);
+            
+            const midStop = 0.5 + (Math.sin(liquidTime1 * 1.5 + layerIdx) * 0.7 + Math.cos(liquidTime2 * 2.0)) * 0.15; 
+            const randAlpha1 = Math.max(0.2, 0.6 + Math.sin(liquidTime1 * 5.2 + layerIdx * 3) * 0.5) * 0.6; 
+            const randAlpha2 = Math.max(0.4, 0.8 + Math.cos(liquidTime2 * 4.7 - layerIdx * 2) * 0.4) * 0.6; 
+
+            grad.addColorStop(0, `rgba(${Math.round(mainC[0])}, ${Math.round(mainC[1])}, ${Math.round(mainC[2])}, 0.0)`);
+            grad.addColorStop(Math.max(midStop, 0.1), `rgba(${Math.round(subC[0])}, ${Math.round(subC[1])}, ${Math.round(subC[2])}, ${Math.min(randAlpha1 * alpha, 1.0)})`);
+            grad.addColorStop(1, `rgba(${Math.round(mainC[0])}, ${Math.round(mainC[1])}, ${Math.round(mainC[2])}, ${Math.min(randAlpha2 * alpha, 1.0)})`);
+
+            ctx.fillStyle = grad;
+            ctx.fill();
+            ctx.filter = 'none'; 
+          };
+
+          if ((activeBass > 0.55 && (activeBass - prevBassRef.current) > 0.04) || (activeMid > 0.60 && (activeMid - prevMidRef.current) > 0.04)) {
+            if (Date.now() - lastBeatTimeRef.current > 250) {
+              lastBeatTimeRef.current = Date.now();
+              sideRipplesRef.current.push({
+                radius: radiusBase * audioScale * 1.3, 
+                scale: 1.0, alpha: 0.6, timeOffset: timeRef.current,
+                colorMain: Math.floor(Math.random() * targetPalette.length),
+                colorSub: Math.floor(Math.random() * targetPalette.length)
+              });
+            }
+          }
+          prevBassRef.current = activeBass;
+          prevMidRef.current = activeMid;
+
+          for (let i = 0; i < shapeCount; i++) {
+            const shapeRatio = 1 - (i * (0.8 / Math.max(shapeCount, 2)));
+            const baseLayerRadius = Math.max(radiusBase * shapeRatio, 10) * 1.3;
+            const depthBlur = (1 - shapeRatio) * 1.5;
+            const scaleBlurFactor = (audioScale - 1) * 0.76;
+            const dynamicBlurPulse = 0.5 + Math.sin(timeRef.current * 0.4 + i * 1.2) * 0.6; 
+            const layerBlur = Math.max((blurIntensity * 0.3) * (depthBlur + scaleBlurFactor) * dynamicBlurPulse, 0);
+            drawBlob(baseLayerRadius, audioScale, i, 0.6, timeRef.current, layerBlur, i, i + 1);
+          }
+
+          for (let i = sideRipplesRef.current.length - 1; i >= 0; i--) {
+            const ripple = sideRipplesRef.current[i];
+            ripple.scale += 0.015 + (reactivity / 100) * 0.015;
+            ripple.alpha -= 0.012; 
+            if (ripple.alpha <= 0) { sideRipplesRef.current.splice(i, 1); continue; }
+            drawBlob(ripple.radius, ripple.scale, 0, ripple.alpha, timeRef.current, blurIntensity * 0.5 * ripple.scale, ripple.colorMain, ripple.colorSub);
+          }
+
+          ctx.restore();
+        };
+
+        draw();
+        return () => cancelAnimationFrame(frameRef.current);
+      }, [started, morphing, shapeCount, theme, complexity, reactivity]);
+
+      return (
+        <div className="h-screen w-full flex overflow-hidden bg-black font-sans">
+          {!started && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md">
+              <div className="flex flex-col items-center gap-6 p-10 rounded-3xl bg-white/5 border border-white/10 shadow-2xl">
+                <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-indigo-500 to-pink-500 animate-pulse flex items-center justify-center shadow-[0_0_40px_rgba(236,72,153,0.4)]">
+                  <Icons.Mic className="w-8 h-8 text-white" />
+                </div>
+                <div className="text-center">
+                  <h2 className="text-3xl font-bold text-white mb-2">Blurry Vibe</h2>
+                  <p className="text-white/60 text-sm">오디오 리액션을 활성화하기 위해 <br /> 마이크 권한을 허용해 주세요.</p>
+                </div>
+                <button
+                  onClick={startVibe}
+                  className="mt-4 px-8 py-3 rounded-full bg-white text-black font-bold text-lg hover:bg-gray-200 transition-all active:scale-95 shadow-[0_0_20px_rgba(255,255,255,0.2)]"
+                >
+                  Start Vibe
+                </button>
+              </div>
+            </div>
+          )}
+
+          {started && (
+            <button 
+              onClick={() => setUiVisible(!uiVisible)}
+              className="absolute top-6 right-6 z-40 p-3 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 text-white transition-all duration-300 shadow-[0_0_15px_rgba(0,0,0,0.5)] active:scale-95"
+              title="Toggle Settings"
+            >
+              <Icons.Layers />
+            </button>
+          )}
+
+          <div
+            className={`${uiVisible ? 'w-[70%]' : 'w-full'} h-full relative flex items-center justify-center overflow-hidden transition-all duration-700 ease-in-out`}
+            style={{ backgroundColor: `rgba(${hexToRGB(bgColor)}, ${bgOpacity / 100})` }}
+          >
+            <div
+              className="absolute"
+              style={{
+                top: '-150px', bottom: '-150px', left: '-150px', right: '-150px',
+                filter: `blur(${blurIntensity * 0.1}px)`
+              }}
+            >
+              <canvas ref={canvasRef} className="w-full h-full block" />
+            </div>
+          </div>
+
+          <div 
+            className={`${uiVisible ? 'w-[30%] opacity-100 translate-x-0' : 'w-0 opacity-0 translate-x-full overflow-hidden'} h-full flex flex-col p-8 gap-6 z-10 bg-white/10 backdrop-blur-xl border-l border-white/20 text-white custom-scrollbar transition-all duration-700 ease-in-out origin-right shrink-0 absolute right-0 top-0`}
+          >
+            <div className="space-y-1 mt-12 overflow-visible">
+              <h1 className="text-2xl font-extrabold bg-gradient-to-br from-white to-white/40 bg-clip-text text-transparent tracking-tight whitespace-nowrap">
+                Visualizer Test
+              </h1>
+              <p className="text-xs text-white/40 font-semibold tracking-widest uppercase whitespace-nowrap">
+                made by uichan
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-6">
+              <ThemeSelector 
+                currentTheme={theme} 
+                onSelect={(name) => {
+                  setTheme(name);
+                  setCurrentColors(THEMES[name]);
+                  setBgColor(THEMES[name][0]);
+                }} 
+                onRandom={() => {
+                  setTheme('Random');
+                  const newColors = generateRandomPalette();
+                  setCurrentColors(newColors);
+                  setBgColor(newColors[0]);
+                }}
+              />
+
+              <div className="flex flex-col gap-3">
+                <div className="flex justify-between items-center text-xs font-semibold text-white/70 uppercase tracking-wide">
+                  <span className="flex items-center gap-2">
+                    <Icons.Palette /> Custom Colors
+                  </span>
+                </div>
+                
+                <div className="flex flex-col gap-4 bg-white/5 p-4 rounded-xl border border-white/10">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-white/80 font-medium">Background Color & Opacity</span>
+                    <div className="flex items-center gap-3">
+                      <input 
+                        type="range" min="0" max="100" value={bgOpacity} onChange={(e) => setBgOpacity(Number(e.target.value))}
+                        className="w-16 h-1 bg-white/20 rounded-full appearance-none outline-none accent-white cursor-pointer"
+                        title={`Opacity: ${bgOpacity}%`}
+                      />
+                      <input 
+                        type="color" value={bgColor} 
+                        onChange={(e) => { setTheme('Custom'); setBgColor(e.target.value); }}
+                        className="w-10 h-8 rounded cursor-pointer border-0 bg-transparent p-0"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="w-full h-[1px] bg-white/10"></div>
+
+                  <div className="flex flex-col gap-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs text-white/80 font-medium">Visualizer Colors</span>
+                    </div>
+                    <div className="flex items-center gap-2 w-full">
+                      {currentColors.map((color, idx) => (
+                        <input 
+                          key={idx} type="color" value={color}
+                          onChange={(e) => {
+                            setTheme('Custom');
+                            const newColors = [...currentColors];
+                            newColors[idx] = e.target.value;
+                            setCurrentColors(newColors);
+                          }}
+                          className="flex-1 h-8 rounded cursor-pointer border-0 bg-transparent p-0"
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="w-full h-[1px] bg-white/5 my-2"></div>
+
+              <Slider label="Morphing" value={morphing} onChange={setMorphing} min={0} max={100} icon={<Icons.Waves />} />
+              <Slider label="Reactivity" value={reactivity} onChange={setReactivity} min={0} max={100} icon={<Icons.Activity />} />
+              <Slider label="Blur Intensity" value={blurIntensity} onChange={setBlurIntensity} min={0} max={150} icon={<Icons.Blur />} />
+              <Slider label="Color Mix Count" value={complexity} onChange={setComplexity} min={1} max={5} icon={<Icons.Palette />} />
+              <Slider label="Shape Layers" value={shapeCount} onChange={setShapeCount} min={1} max={12} icon={<Icons.Layers />} />
+              
+              <div className="w-full h-[1px] bg-white/5 my-2"></div>
+
+              <Slider label="Color Flow Speed" value={colorFlowSpeed} onChange={setColorFlowSpeed} min={0} max={100} icon={<Icons.Palette />} />
+              <Slider label="Heartbeat BPM" value={heartbeatBpm} onChange={setHeartbeatBpm} min={40} max={180} icon={<Icons.Activity />} />
+              <Slider label="Focal Wander" value={focalWander} onChange={setFocalWander} min={0} max={100} icon={<Icons.Shuffle />} />
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function Slider({ label, value, onChange, min, max, step = 1, icon }) {
+      return (
+        <div className="flex flex-col gap-3">
+          <div className="flex justify-between items-center text-xs font-semibold text-white/70 uppercase tracking-wide">
+            <span className="flex items-center gap-2">
+              {icon} {label}
+            </span>
+            <span className="bg-white/10 px-2 py-0.5 rounded-md text-white font-mono border border-white/5">
+              {value}
+            </span>
+          </div>
+          <input
+            type="range" min={min} max={max} step={step} value={value}
+            onChange={(e) => onChange(Number(e.target.value))}
+            className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-white transition-all outline-none"
+          />
+        </div>
+      )
+    }
+
+    function ThemeSelector({ currentTheme, onSelect, onRandom }) {
+      return (
+        <div className="flex flex-col gap-3">
+          <div className="flex justify-between items-center text-xs font-semibold text-white/70 uppercase tracking-wide mb-1">
+            <span className="flex items-center gap-2">
+              <Icons.Palette /> Color Theme
+            </span>
+            <button 
+              onClick={onRandom}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-md transition-all active:scale-95 text-[10px] tracking-wider border border-white/10"
+            >
+              <Icons.Shuffle /> RANDOM
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            {Object.entries(THEMES).map(([name, colors]) => (
+              <button
+                key={name} onClick={() => onSelect(name)}
+                className={`flex flex-col items-start p-3 rounded-xl border transition-all duration-300 ${currentTheme === name ? 'bg-white/10 border-white/30' : 'bg-transparent border-white/5 hover:bg-white/5'}`}
+              >
+                <span className="text-[11px] font-bold text-white/90 mb-2 uppercase tracking-wider">{name}</span>
+                <div className="flex w-full h-2 rounded-full overflow-hidden">
+                  {colors.map((c, i) => (
+                    <div key={i} className="flex-1 h-full" style={{ backgroundColor: c }} />
+                  ))}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )
+    }
+
+    const generateRandomPalette = () => {
+      const colors = [];
+      for (let i = 0; i < 5; i++) {
+        const h = Math.floor(Math.random() * 360); 
+        const s = 65 + Math.random() * 35;
+        const l = 40 + Math.random() * 20;
+        colors.push(hslToHex(h, s, l));
+      }
+      return colors;
+    };
+
+    const hslToHex = (h, s, l) => {
+      l /= 100;
+      const a = s * Math.min(l, 1 - l) / 100;
+      const f = n => {
+        const k = (n + h / 30) % 12;
+        const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+        return Math.round(255 * color).toString(16).padStart(2, '0');
+      };
+      return `#${f(0)}${f(8)}${f(4)}`;
+    };
+
+    const hexToRGB = (hex) => {
+      let r = 0, g = 0, b = 0;
+      if (hex.length === 4) {
+        r = parseInt(hex[1] + hex[1], 16);
+        g = parseInt(hex[2] + hex[2], 16);
+        b = parseInt(hex[3] + hex[3], 16);
+      } else if (hex.length === 7) {
+        r = parseInt(hex[1] + hex[2], 16);
+        g = parseInt(hex[3] + hex[4], 16);
+        b = parseInt(hex[5] + hex[6], 16);
+      }
+      return `${r}, ${g}, ${b}`;
+    };
+
+    const Icons = {
+      Mic: (props) => <svg viewBox="0 0 24 24" className="w-8 h-8 shrink-0 text-white" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" x2="12" y1="19" y2="22" /></svg>,
+      Activity: (props) => <svg viewBox="0 0 24 24" className="w-6 h-6 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" {...props}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" /></svg>,
+      Blur: (props) => <svg viewBox="0 0 24 24" className="w-6 h-6 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" {...props}><circle cx="12" cy="12" r="10" /><path d="M12 2a10 10 0 0 0 0 20" /></svg>,
+      Layers: (props) => <svg viewBox="0 0 24 24" className="w-6 h-6 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" {...props}><polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /><polyline points="2 12 12 17 22 12" /></svg>,
+      Waves: (props) => <svg viewBox="0 0 24 24" className="w-6 h-6 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M2 12h4l2 -9l5 18l4 -6h5" /></svg>,
+      Palette: (props) => <svg viewBox="0 0 24 24" className="w-6 h-6 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" {...props}><circle cx="13.5" cy="6.5" r=".5" /><circle cx="17.5" cy="10.5" r=".5" /><circle cx="8.5" cy="7.5" r=".5" /><circle cx="6.5" cy="12.5" r=".5" /><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z" /></svg>,
+      Shuffle: (props) => <svg viewBox="0 0 24 24" className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" {...props}><polyline points="16 3 21 3 21 8" /><line x1="4" y1="20" x2="21" y2="3" /><polyline points="21 16 21 21 16 21" /><line x1="15" y1="15" x2="21" y2="21" /><line x1="4" y1="4" x2="9" y2="9" /></svg>
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
